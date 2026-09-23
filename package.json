@@ -9,7 +9,7 @@
     "client": "npm --prefix client run dev",
     "dev": "node server.js",
     "build": "npm --prefix client install --include=dev && npm --prefix client run build",
-    "postinstall": "npm --prefix client install --include=dev && npm --prefix client run build",
+    "postinstall": "echo Skipping client build on server",
     "init-db": "node scripts/init-db.js"
   },
   "dependencies": {
