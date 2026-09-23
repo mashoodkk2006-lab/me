@@ -1,12 +1,16 @@
 {
-  "name": "aurora-protocol",
-  "version": "1.0.0",
-  "description": "The Aurora Protocol - Event Management & Access Control System",
+  "name": "the-aurora-protocol",
+  "version": "2.0.0",
+  "description": "The Aurora Protocol - Event Crowd Management, Real-Time Access Control & Leaderboard System",
   "main": "server.js",
-  "type": "commonjs",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "server": "node server.js",
+    "client": "npm --prefix client run dev",
+    "dev": "node server.js",
+    "build": "npm --prefix client install && npm --prefix client run build",
+    "postinstall": "npm --prefix client install && npm --prefix client run build",
+    "init-db": "node scripts/init-db.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
@@ -15,8 +19,11 @@
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "jsonwebtoken": "^9.0.2",
-    "mysql2": "^3.24.4",
+    "mysql2": "^3.12.0",
     "qrcode": "^1.5.4",
     "socket.io": "^4.8.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
