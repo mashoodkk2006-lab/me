@@ -350,6 +350,23 @@ export default function AdminPortal() {
     } catch (e) {}
   };
 
+  // Delete Team Permanently
+  const handleDeleteTeam = async (team) => {
+    if (!window.confirm(`⚠️ PERMANENT ACTION:\nAre you sure you want to completely DELETE team "${team.team_name}" (${team.team_id})?\n\nThis will permanently delete all their room logs, scores, and access records.`)) return;
+    try {
+      const res = await fetch(`/api/admin/teams/${team.id}`, { method: 'DELETE' });
+      if (res.ok) {
+        fetchTeams();
+        fetchMonitor();
+      } else {
+        const data = await res.json();
+        alert(data.error || 'Failed to delete team.');
+      }
+    } catch (e) {
+      alert('Network error while deleting team.');
+    }
+  };
+
   // Create Volunteer
   const handleCreateVolunteer = async (e) => {
     e.preventDefault();
@@ -838,6 +855,24 @@ export default function AdminPortal() {
                                 style={{ padding: '4px 10px', minHeight: '30px', fontSize: '0.75rem' }}
                               >
                                 ELIMINATE
+                              </button>
+                            )}
+
+                            {isHeadAdmin && (
+                              <button
+                                onClick={() => handleDeleteTeam(t)}
+                                className="btn"
+                                title="Permanently Delete Team"
+                                style={{
+                                  padding: '4px 8px',
+                                  minHeight: '30px',
+                                  fontSize: '0.75rem',
+                                  background: 'rgba(239, 68, 68, 0.15)',
+                                  border: '1px solid rgba(239, 68, 68, 0.4)',
+                                  color: '#f87171'
+                                }}
+                              >
+                                <Trash2 size={14} />
                               </button>
                             )}
                           </div>

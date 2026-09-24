@@ -247,6 +247,14 @@ function executeMemory(sql, params = []) {
     return { affectedRows: memoryStore.teams.length };
   }
 
+  if (s.startsWith('delete from teams where id = ?')) {
+    const targetId = params[0];
+    memoryStore.teams = memoryStore.teams.filter(t => t.id !== targetId);
+    memoryStore.room_entries = memoryStore.room_entries.filter(r => r.team_id !== targetId);
+    memoryStore.score_history = memoryStore.score_history.filter(h => h.team_id !== targetId);
+    return { affectedRows: 1 };
+  }
+
   if (s.startsWith('delete from room_entries')) {
     memoryStore.room_entries = [];
     return { affectedRows: 1 };

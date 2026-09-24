@@ -247,6 +247,30 @@ router.post('/teams/:id/restore', requireHeadAdmin, async (req, res) => {
   }
 });
 
+// Delete team permanently
+router.delete('/teams/:id', requireHeadAdmin, async (req, res) => {
+  try {
+    const teamId = parseInt(req.params.id, 10);
+    const team = await getOne('SELECT * FROM teams WHERE id = ?', [teamId]);
+    if (!team) return res.status(404).json({ error: 'Team not found.' });
+
+    // Delete dependent records first if DB foreign keys aren't cascaded
+    await execute('DELETE FROM room_entries WHERE team_id = ?', [teamId]);
+    await execute('DELETE FROM score_history WHERE team_id = ?', [teamId]);
+    await execute('DELETE FROM teams WHERE id = ?', [teamId]);
+
+    await logActivity(req.user.id, req.user.username, 'DELETE_TEAM', `Permanently deleted team ${team.team_id} (${team.team_name})`);
+
+    broadcastTeamStatus({ team_id: teamId, status: 'DELETED', team_name: team.team_name });
+    await broadcastLeaderboard();
+
+    res.json({ success: true, message: `Team ${team.team_name} has been deleted permanently.` });
+  } catch (err) {
+    console.error('Delete team error:', err);
+    res.status(500).json({ error: 'Failed to delete team.' });
+  }
+});
+
 // Generate/View QR code image for a team
 router.get('/teams/:id/qr', requireHeadAdmin, async (req, res) => {
   try {

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { io } from 'socket.io-client';
-import { ShieldCheck, ShieldAlert, Clock, LogOut, Lock, User, RefreshCw } from 'lucide-react';
+import { ShieldCheck, ShieldAlert, Clock, LogOut, Lock, User, RefreshCw, QrCode, Download, Eye, X } from 'lucide-react';
 import Leaderboard from '../components/Leaderboard';
 import IntellixLoader from '../components/IntellixLoader';
 
@@ -16,6 +16,7 @@ export default function StudentPortal() {
   const [leaderboard, setLeaderboard] = useState([]);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
+  const [showQRModal, setShowQRModal] = useState(false);
 
   // Login form state
   const [loginId, setLoginId] = useState('');
@@ -385,10 +386,104 @@ export default function StudentPortal() {
             </div>
           </div>
 
+          {/* QR ACCESS BADGE SECTION */}
+          <div
+            style={{
+              marginTop: '20px',
+              padding: '20px',
+              background: 'rgba(0, 240, 255, 0.03)',
+              border: '1px solid rgba(0, 240, 255, 0.25)',
+              borderRadius: 'var(--radius-md)',
+              display: 'flex',
+              flexWrap: 'wrap',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '20px'
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '20px', flexWrap: 'wrap' }}>
+              {team?.qr_code_data_url ? (
+                <div
+                  style={{
+                    background: '#ffffff',
+                    padding: '8px',
+                    borderRadius: 'var(--radius-sm)',
+                    boxShadow: '0 0 25px rgba(0, 240, 255, 0.3)',
+                    cursor: 'pointer',
+                    display: 'inline-block',
+                    textAlign: 'center'
+                  }}
+                  onClick={() => setShowQRModal(true)}
+                  title="Click to Enlarge QR Badge"
+                >
+                  <img
+                    src={team.qr_code_data_url}
+                    alt={`${team.team_name} QR Code`}
+                    style={{ width: '120px', height: '120px', display: 'block' }}
+                  />
+                  <span style={{ fontSize: '0.65rem', color: '#000', fontWeight: 800, fontFamily: "'JetBrains Mono', monospace" }}>
+                    {team.team_id}
+                  </span>
+                </div>
+              ) : (
+                <div
+                  style={{
+                    width: '120px',
+                    height: '120px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    background: 'rgba(255, 255, 255, 0.05)',
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px dashed var(--border-subtle)'
+                  }}
+                >
+                  <QrCode size={36} color="var(--text-dim)" />
+                </div>
+              )}
+
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+                  <QrCode size={18} color="#00f0ff" />
+                  <span style={{ fontSize: '0.8rem', color: '#00f0ff', fontWeight: 800, letterSpacing: '1.5px', fontFamily: "'JetBrains Mono', monospace" }}>
+                    OFFICIAL ACCESS QR BADGE
+                  </span>
+                </div>
+                <h3 style={{ fontSize: '1.1rem', color: '#ffffff', marginBottom: '6px' }}>
+                  Door Entry &amp; Station Scanner Pass
+                </h3>
+                <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', maxWidth: '400px', lineHeight: 1.5 }}>
+                  Show this QR code to the volunteer scanner at the door of the <strong>Police Investigation Room</strong> or <strong>Scientist Lab</strong> to authenticate entry.
+                </p>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+              <button
+                onClick={() => setShowQRModal(true)}
+                className="btn btn-secondary"
+                style={{ padding: '8px 14px', fontSize: '0.8rem' }}
+              >
+                <Eye size={14} /> ENLARGE BADGE
+              </button>
+              {team?.qr_code_data_url && (
+                <a
+                  href={team.qr_code_data_url}
+                  download={`AURORA_QR_${team.team_id}.png`}
+                  className="btn btn-primary"
+                  style={{ padding: '8px 14px', fontSize: '0.8rem', textDecoration: 'none' }}
+                >
+                  <Download size={14} /> SAVE QR PASS
+                </a>
+              )}
+            </div>
+          </div>
+
           {/* ACTIVE ROOM COUNTDOWN SECTION */}
           {currentRoom && remainingSeconds > 0 ? (
             <div
               style={{
+                marginTop: '20px',
                 background: 'rgba(16, 185, 129, 0.08)',
                 border: '1px solid rgba(16, 185, 129, 0.4)',
                 borderRadius: 'var(--radius-md)',
@@ -430,6 +525,7 @@ export default function StudentPortal() {
           ) : (
             <div
               style={{
+                marginTop: '20px',
                 background: 'rgba(255, 255, 255, 0.02)',
                 border: '1px dashed var(--border-subtle)',
                 borderRadius: 'var(--radius-md)',
@@ -449,6 +545,104 @@ export default function StudentPortal() {
         {/* LIVE LEADERBOARD COMPONENT */}
         <Leaderboard teams={leaderboard} currentTeamId={team?.id} />
       </main>
+
+      {/* FULLSCREEN QR BADGE MODAL */}
+      {showQRModal && team?.qr_code_data_url && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0, 0, 0, 0.88)',
+            backdropFilter: 'blur(8px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '20px',
+            zIndex: 9999
+          }}
+          onClick={() => setShowQRModal(false)}
+        >
+          <div
+            className="glass-panel"
+            style={{
+              maxWidth: '380px',
+              width: '100%',
+              padding: '28px',
+              textAlign: 'center',
+              position: 'relative',
+              border: '1px solid rgba(0, 240, 255, 0.4)',
+              boxShadow: '0 0 40px rgba(0, 240, 255, 0.2)'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              onClick={() => setShowQRModal(false)}
+              style={{
+                position: 'absolute',
+                top: '12px',
+                right: '12px',
+                background: 'transparent',
+                border: 'none',
+                color: 'var(--text-muted)',
+                cursor: 'pointer',
+                padding: '4px'
+              }}
+            >
+              <X size={20} />
+            </button>
+
+            <span className="tag tag-room" style={{ marginBottom: '12px' }}>
+              THE AURORA PROTOCOL PASS
+            </span>
+
+            <h2 style={{ fontSize: '1.4rem', color: '#fff', marginTop: '4px' }}>
+              {team.team_name}
+            </h2>
+            <p style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '0.9rem', color: '#00f0ff', marginBottom: '16px' }}>
+              ID: {team.team_id}
+            </p>
+
+            <div
+              style={{
+                background: '#ffffff',
+                padding: '16px',
+                borderRadius: 'var(--radius-md)',
+                display: 'inline-block',
+                margin: '0 auto 16px auto',
+                boxShadow: '0 0 25px rgba(255, 255, 255, 0.2)'
+              }}
+            >
+              <img
+                src={team.qr_code_data_url}
+                alt={`${team.team_name} QR Code`}
+                style={{ width: '220px', height: '220px', display: 'block' }}
+              />
+            </div>
+
+            <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontFamily: "'JetBrains Mono', monospace", marginBottom: '20px' }}>
+              SCAN TO GRANT ENTRY // PROTOCOL SECURITY
+            </p>
+
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <a
+                href={team.qr_code_data_url}
+                download={`AURORA_QR_${team.team_id}.png`}
+                className="btn btn-primary"
+                style={{ flex: 1, textDecoration: 'none', justifyContent: 'center' }}
+              >
+                <Download size={15} /> DOWNLOAD QR
+              </a>
+              <button
+                onClick={() => setShowQRModal(false)}
+                className="btn btn-secondary"
+                style={{ flex: 1 }}
+              >
+                CLOSE
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

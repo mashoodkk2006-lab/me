@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const QRCode = require('qrcode');
 const { query, getOne } = require('../db');
 const { requireStudent } = require('../auth');
 
@@ -17,6 +18,27 @@ router.get('/dashboard', requireStudent, async (req, res) => {
 
     if (!team) {
       return res.status(404).json({ error: 'Team record not found.' });
+    }
+
+    // Generate QR Code data URL
+    const qrData = JSON.stringify({
+      t: team.qr_token,
+      id: team.team_id,
+      name: team.team_name
+    });
+
+    let qrCodeDataUrl = '';
+    try {
+      qrCodeDataUrl = await QRCode.toDataURL(qrData, {
+        width: 400,
+        margin: 2,
+        color: {
+          dark: '#000000',
+          light: '#ffffff'
+        }
+      });
+    } catch (e) {
+      console.error('QR generation error for student:', e);
     }
 
     // 2. Fetch Active Round
@@ -59,6 +81,8 @@ router.get('/dashboard', requireStudent, async (req, res) => {
         score: team.score,
         status: team.status,
         current_round: team.current_round,
+        qr_token: team.qr_token,
+        qr_code_data_url: qrCodeDataUrl,
         rank
       },
       active_round: activeRound || null,
@@ -78,4 +102,38 @@ router.get('/dashboard', requireStudent, async (req, res) => {
   }
 });
 
+// ─── GET STUDENT QR CODE IMAGE ───────────────────────────────────────────────
+router.get('/qr', requireStudent, async (req, res) => {
+  try {
+    const teamId = req.user.id;
+    const team = await getOne('SELECT id, team_id, team_name, qr_token FROM teams WHERE id = ?', [teamId]);
+    if (!team) return res.status(404).json({ error: 'Team not found.' });
+
+    const qrData = JSON.stringify({
+      t: team.qr_token,
+      id: team.team_id,
+      name: team.team_name
+    });
+
+    const dataUrl = await QRCode.toDataURL(qrData, {
+      width: 400,
+      margin: 2,
+      color: {
+        dark: '#000000',
+        light: '#ffffff'
+      }
+    });
+
+    res.json({
+      team_id: team.team_id,
+      team_name: team.team_name,
+      qr_token: team.qr_token,
+      qr_code_data_url: dataUrl
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to generate QR code.' });
+  }
+});
+
 module.exports = router;
+
