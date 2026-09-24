@@ -18,15 +18,30 @@ router.get('/room-status', requireAdminOrVolunteer, async (req, res) => {
     const activeRound = await getOne("SELECT * FROM rounds WHERE status = 'ACTIVE' ORDER BY round_number ASC LIMIT 1");
     const now = Date.now();
 
-    // Check for an currently running active entry in this room
-    const currentEntry = await getOne(
+    // Fetch ALL currently running active entries in this room
+    const activeEntriesRaw = await query(
       `SELECT re.*, t.team_id as team_code, t.team_name, t.status as team_status
        FROM room_entries re
        JOIN teams t ON re.team_id = t.id
-       WHERE re.room_id = ? AND re.status = 'ACTIVE' AND re.expiry_time > ?
-       ORDER BY re.entry_time DESC LIMIT 1`,
-      [room.id, now]
+       WHERE re.room_id = ? AND re.status = 'ACTIVE'
+       ORDER BY re.entry_time DESC`,
+      [room.id]
     );
+
+    const activeEntries = activeEntriesRaw.map(e => ({
+      id: e.id,
+      entry_id: e.id,
+      team_id: e.team_id,
+      team_code: e.team_code,
+      team_name: e.team_name,
+      team_status: e.team_status,
+      entry_time: e.entry_time,
+      expiry_time: e.expiry_time,
+      is_expired: now >= e.expiry_time,
+      remaining_seconds: Math.max(0, Math.floor((e.expiry_time - now) / 1000))
+    }));
+
+    const currentEntry = activeEntries.length > 0 ? activeEntries[0] : null;
 
     // Duration setting
     let durationMinutes = 5;
@@ -43,19 +58,35 @@ router.get('/room-status', requireAdminOrVolunteer, async (req, res) => {
       active_round: activeRound || null,
       duration_minutes: durationMinutes,
       server_time: now,
-      current_entry: currentEntry ? {
-        id: currentEntry.id,
-        team_id: currentEntry.team_id,
-        team_code: currentEntry.team_code,
-        team_name: currentEntry.team_name,
-        entry_time: currentEntry.entry_time,
-        expiry_time: currentEntry.expiry_time,
-        remaining_seconds: Math.max(0, Math.floor((currentEntry.expiry_time - now) / 1000))
-      } : null
+      active_entries: activeEntries,
+      current_entry: currentEntry
     });
   } catch (err) {
     console.error('Room status error:', err);
     res.status(500).json({ error: 'Failed to retrieve room status.' });
+  }
+});
+
+// ─── DISMISS / COMPLETE A ROOM ENTRY ─────────────────────────────────────────
+router.post('/entries/:id/dismiss', requireAdminOrVolunteer, async (req, res) => {
+  try {
+    const entryId = parseInt(req.params.id, 10);
+    const entry = await getOne('SELECT * FROM room_entries WHERE id = ?', [entryId]);
+    if (!entry) return res.status(404).json({ error: 'Entry not found.' });
+
+    await execute("UPDATE room_entries SET status = 'EXPIRED' WHERE id = ?", [entryId]);
+
+    await logActivity(
+      req.user.id,
+      req.user.username,
+      'DISMISS_ENTRY',
+      `Room entry #${entryId} dismissed by ${req.user.username}`
+    );
+
+    res.json({ success: true, message: 'Room entry marked as completed/vacated.' });
+  } catch (err) {
+    console.error('Dismiss entry error:', err);
+    res.status(500).json({ error: 'Failed to dismiss room entry.' });
   }
 });
 

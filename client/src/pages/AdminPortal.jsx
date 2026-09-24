@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
 import {
   ShieldAlert, ShieldCheck, QrCode, Users, Clock, Settings,
   AlertTriangle, RefreshCw, Plus, Trash2, LogOut, Camera, CheckCircle2,
-  XCircle, Trophy, Volume2, UserPlus, FileText, Download, Play, Eye
+  XCircle, Trophy, Volume2, UserPlus, FileText, Download, Play, Eye,
+  Bell, X, UserCheck, AlertOctagon, ArrowRight
 } from 'lucide-react';
 import QRScannerModal from '../components/QRScannerModal';
 import Leaderboard from '../components/Leaderboard';
@@ -12,7 +13,7 @@ import { playAccessGranted, playAccessDenied, playTimesUp } from '../utils/audio
 export default function AdminPortal() {
   const [currentUser, setCurrentUser] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('monitor'); // monitor, teams, volunteers, rounds, leaderboard
+  const [activeTab, setActiveTab] = useState('monitor'); // monitor, teams, volunteers, rounds, leaderboard, scanner
 
   // Monitor state
   const [monitorData, setMonitorData] = useState(null);
@@ -20,10 +21,12 @@ export default function AdminPortal() {
   const [volunteers, setVolunteers] = useState([]);
   const [roundsData, setRoundsData] = useState({ rounds: [], rooms: [], settings: [] });
 
-  // Volunteer scanner state
+  // Volunteer scanner state & Multi-Team entries inside room
   const [isScannerOpen, setIsScannerOpen] = useState(false);
-  const [scanResult, setScanResult] = useState(null); // { status, message, team, duration_minutes, expiry_time, ... }
-  const [scanCountdown, setScanCountdown] = useState(0);
+  const [scanResult, setScanResult] = useState(null); // toast / scan feedback
+  const [activeRoomEntries, setActiveRoomEntries] = useState([]); // Array of all teams in this room
+  const [timesUpAlert, setTimesUpAlert] = useState(null); // { team_name, team_code, entry_id, room_name }
+  const alertedEntriesRef = useRef(new Set());
 
   // Modals state
   const [qrModalTeam, setQrModalTeam] = useState(null);
@@ -134,21 +137,17 @@ export default function AdminPortal() {
 
   const fetchRoomStatus = async () => {
     try {
-      const res = await fetch(`/api/volunteer/room-status?room_code=${currentUser.assigned_room}`);
+      const roomCode = currentUser?.assigned_room || 'POLICE';
+      const res = await fetch(`/api/volunteer/room-status?room_code=${roomCode}`);
       if (res.ok) {
         const data = await res.json();
-        if (data.current_entry) {
-          setScanResult({
-            status: 'GRANTED',
-            message: 'ACCESS GRANTED',
-            team: {
-              team_id: data.current_entry.team_code,
-              team_name: data.current_entry.team_name
-            },
-            expiry_time: data.current_entry.expiry_time
-          });
-          setScanCountdown(data.current_entry.remaining_seconds);
-        }
+        const now = Date.now();
+        const entries = (data.active_entries || []).map(e => ({
+          ...e,
+          remaining_seconds: Math.max(0, Math.floor((e.expiry_time - now) / 1000)),
+          is_expired: now >= e.expiry_time
+        }));
+        setActiveRoomEntries(entries);
       }
     } catch (e) {}
   };
@@ -163,6 +162,7 @@ export default function AdminPortal() {
 
     socket.on('room_entry_update', () => {
       fetchMonitor();
+      fetchRoomStatus();
     });
 
     socket.on('team_status_update', () => {
@@ -178,32 +178,54 @@ export default function AdminPortal() {
     socket.on('event_reset', () => {
       refreshAllData();
       setScanResult(null);
+      setActiveRoomEntries([]);
+      alertedEntriesRef.current.clear();
+      setTimesUpAlert(null);
     });
 
     return () => socket.disconnect();
   }, [currentUser]);
 
-  // 4. Scanner Countdown Ticker
+  // 4. Multi-Team Scanner Countdown Ticker & Time's Up Alert Detector
   useEffect(() => {
-    if (!scanResult || scanResult.status !== 'GRANTED' || !scanResult.expiry_time) return;
+    if (activeRoomEntries.length === 0) return;
 
     const timer = setInterval(() => {
-      const left = Math.max(0, Math.floor((scanResult.expiry_time - Date.now()) / 1000));
-      setScanCountdown(left);
+      const now = Date.now();
+      let alertItem = null;
 
-      if (left === 0) {
-        clearInterval(timer);
+      setActiveRoomEntries(prevEntries => {
+        return prevEntries.map(entry => {
+          const remaining = Math.max(0, Math.floor((entry.expiry_time - now) / 1000));
+          const isExpired = remaining <= 0;
+
+          // If entry just hit 0 and hasn't alerted yet
+          if (isExpired && !alertedEntriesRef.current.has(entry.id)) {
+            alertedEntriesRef.current.add(entry.id);
+            alertItem = {
+              team_name: entry.team_name,
+              team_code: entry.team_code,
+              entry_id: entry.id,
+              room_name: currentUser?.assigned_room ? `${currentUser.assigned_room} ROOM` : 'ROOM'
+            };
+          }
+
+          return {
+            ...entry,
+            remaining_seconds: remaining,
+            is_expired: isExpired
+          };
+        });
+      });
+
+      if (alertItem) {
         playTimesUp();
-        setScanResult(prev => ({
-          ...prev,
-          status: 'TIMES_UP',
-          message: `TIME'S UP — ${prev.team?.team_name || 'TEAM'}`
-        }));
+        setTimesUpAlert(alertItem);
       }
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [scanResult]);
+  }, [activeRoomEntries.length, currentUser]);
 
   // ─── HANDLERS ─────────────────────────────────────────────────────────────
 
@@ -238,6 +260,20 @@ export default function AdminPortal() {
     setCurrentUser(null);
   };
 
+  // Dismiss / Vacate Room Entry
+  const handleDismissEntry = async (entryId) => {
+    try {
+      const res = await fetch(`/api/volunteer/entries/${entryId}/dismiss`, { method: 'POST' });
+      if (res.ok) {
+        fetchRoomStatus();
+        fetchMonitor();
+        if (timesUpAlert && timesUpAlert.entry_id === entryId) {
+          setTimesUpAlert(null);
+        }
+      }
+    } catch (e) {}
+  };
+
   // QR Scan Handling (Volunteer or Head Admin)
   const handleScanSuccess = async (qrData) => {
     setIsScannerOpen(false);
@@ -255,12 +291,13 @@ export default function AdminPortal() {
         playAccessGranted();
         setScanResult({
           status: 'GRANTED',
-          message: 'ACCESS GRANTED',
+          message: `ACCESS GRANTED // ${data.team?.team_name} (${data.team?.team_id})`,
           team: data.team,
           expiry_time: data.expiry_time,
           duration_minutes: data.duration_minutes
         });
-        setScanCountdown(data.remaining_seconds);
+        fetchRoomStatus();
+        fetchMonitor();
       } else {
         playAccessDenied();
         setScanResult({
@@ -667,85 +704,175 @@ export default function AdminPortal() {
           </div>
         )}
 
-        {/* ─── TAB: QR SCANNER (Volunteer or Head Admin) ─────────────────────── */}
+        {/* ─── TAB: QR SCANNER / ROOM ACCESS STATION (Volunteer or Head Admin) ─── */}
         {activeTab === 'scanner' && (
-          <div style={{ maxWidth: '600px', margin: '0 auto', width: '100%' }}>
+          <div style={{ width: '100%', maxWidth: '900px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+            {/* Top Scanner Control Bar */}
             <div className="glass-panel" style={{ padding: '24px' }}>
-              <div style={{ textAlign: 'center', marginBottom: '20px' }}>
-                <span className="tag tag-room" style={{ marginBottom: '8px' }}>
-                  {currentUser?.assigned_room || 'POLICE'} STATION SCANNER
-                </span>
-                <h2 style={{ fontSize: '1.5rem', marginTop: '6px' }}>DOOR ACCESS SCANNER</h2>
-                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontFamily: "'JetBrains Mono', monospace" }}>
-                  VALIDATION RULE: TEAM + ROUND + ROOM (SINGLE ENTRY)
-                </p>
+              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: '16px', marginBottom: '16px' }}>
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                    <span className="tag tag-room">{currentUser?.assigned_room || 'POLICE'} STATION SCANNER</span>
+                    <span className="tag tag-active">{activeRoomEntries.length} TEAMS INSIDE</span>
+                  </div>
+                  <h2 style={{ fontSize: '1.5rem', color: '#fff' }}>DOOR ACCESS &amp; ROOM MANAGEMENT</h2>
+                  <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontFamily: "'JetBrains Mono', monospace" }}>
+                    Scan QR codes to admit teams. Multiple teams can be inside simultaneously with independent timers.
+                  </p>
+                </div>
+
+                <button
+                  onClick={() => setIsScannerOpen(true)}
+                  className="btn btn-primary"
+                  style={{ padding: '12px 24px', fontSize: '1rem', fontWeight: 800, letterSpacing: '1px' }}
+                >
+                  <Camera size={20} /> 📷 SCAN NEW TEAM ENTRY
+                </button>
               </div>
 
-              {/* MASSIVE STATUS RESULT SCREEN */}
-              {scanResult ? (
-                <div style={{ marginBottom: '24px' }}>
-                  {scanResult.status === 'GRANTED' && (
-                    <div className="status-screen-banner status-screen-granted">
-                      <CheckCircle2 size={54} color="#10b981" />
-                      <div style={{ fontSize: '2rem', fontWeight: 900, color: '#ffffff', letterSpacing: '1px' }}>
-                        ACCESS GRANTED
-                      </div>
-                      <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#34d399' }}>
-                        {scanResult.team?.team_name} ({scanResult.team?.team_id})
-                      </div>
-
-                      <div className="countdown-display countdown-normal" style={{ margin: '12px 0' }}>
-                        {formatTime(scanCountdown)}
-                      </div>
-                      <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                        COUNTDOWN IN PROGRESS ({scanResult.duration_minutes} MIN)
-                      </span>
-                    </div>
-                  )}
-
-                  {scanResult.status === 'TIMES_UP' && (
-                    <div className="status-screen-banner status-screen-timesup">
-                      <AlertTriangle size={54} color="#ff1e42" />
-                      <div style={{ fontSize: '2rem', fontWeight: 900, color: '#ffffff', letterSpacing: '2px' }}>
-                        {scanResult.message}
-                      </div>
-                      <p style={{ fontSize: '0.9rem', color: '#fca5a5' }}>
-                        SESSION EXPIRED. PLEASE VACATE THE ROOM IMMEDIATELY.
-                      </p>
-                    </div>
-                  )}
-
-                  {(scanResult.status.startsWith('DENIED')) && (
-                    <div className="status-screen-banner status-screen-denied">
-                      <XCircle size={54} color="#ef4444" />
-                      <div style={{ fontSize: '1.4rem', fontWeight: 900, color: '#ffffff' }}>
-                        {scanResult.message}
-                      </div>
+              {/* RECENT SCAN NOTIFICATION TOAST */}
+              {scanResult && (
+                <div
+                  style={{
+                    padding: '14px 18px',
+                    borderRadius: 'var(--radius-md)',
+                    marginTop: '12px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '12px',
+                    background: scanResult.status === 'GRANTED' ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                    border: scanResult.status === 'GRANTED' ? '1px solid rgba(16, 185, 129, 0.4)' : '1px solid rgba(239, 68, 68, 0.4)',
+                    color: scanResult.status === 'GRANTED' ? '#34d399' : '#f87171'
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    {scanResult.status === 'GRANTED' ? <CheckCircle2 size={24} color="#10b981" /> : <XCircle size={24} color="#ef4444" />}
+                    <div>
+                      <strong style={{ fontSize: '0.95rem', display: 'block' }}>{scanResult.message}</strong>
                       {scanResult.team && (
-                        <div style={{ fontSize: '1rem', color: '#fca5a5' }}>
-                          TEAM: {scanResult.team.team_name} ({scanResult.team.team_id})
-                        </div>
+                        <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)', fontFamily: "'JetBrains Mono', monospace" }}>
+                          Team: {scanResult.team.team_name} ({scanResult.team.team_id})
+                        </span>
                       )}
                     </div>
-                  )}
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button
+                      onClick={() => setIsScannerOpen(true)}
+                      className="btn btn-primary"
+                      style={{ padding: '6px 12px', fontSize: '0.75rem' }}
+                    >
+                      SCAN NEXT
+                    </button>
+                    <button
+                      onClick={() => setScanResult(null)}
+                      style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
+                    >
+                      <X size={16} />
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
 
-                  <button
-                    onClick={() => { setScanResult(null); setIsScannerOpen(true); }}
-                    className="btn btn-primary btn-block btn-lg"
-                    style={{ marginTop: '20px' }}
-                  >
-                    SCAN NEXT TEAM
-                  </button>
+            {/* LIVE ACTIVE TEAMS INSIDE THIS ROOM */}
+            <div className="glass-panel" style={{ padding: '24px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '18px' }}>
+                <h3 style={{ fontSize: '1.2rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Users size={18} color="#00f0ff" /> CURRENTLY OCCUPYING TEAMS ({activeRoomEntries.length})
+                </h3>
+                <button
+                  onClick={fetchRoomStatus}
+                  className="btn btn-secondary"
+                  style={{ padding: '6px 12px', fontSize: '0.75rem' }}
+                >
+                  <RefreshCw size={13} /> REFRESH
+                </button>
+              </div>
+
+              {activeRoomEntries.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-dim)', border: '1px dashed var(--border-subtle)', borderRadius: 'var(--radius-md)' }}>
+                  <Clock size={40} style={{ margin: '0 auto 10px auto', opacity: 0.3 }} />
+                  <div style={{ fontSize: '1.1rem', color: 'var(--text-muted)', fontWeight: 600 }}>ROOM CURRENTLY VACANT</div>
+                  <p style={{ fontSize: '0.8rem', fontFamily: "'JetBrains Mono', monospace", marginTop: '4px' }}>
+                    No teams are inside right now. Click "SCAN NEW TEAM ENTRY" to admit teams.
+                  </p>
                 </div>
               ) : (
-                <div style={{ textAlign: 'center', padding: '30px 0' }}>
-                  <button
-                    onClick={() => setIsScannerOpen(true)}
-                    className="btn btn-primary btn-lg btn-block"
-                    style={{ padding: '20px', fontSize: '1.2rem' }}
-                  >
-                    <Camera size={26} /> LAUNCH QR CAMERA
-                  </button>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '16px' }}>
+                  {activeRoomEntries.map((entry) => {
+                    const isTimeUp = entry.remaining_seconds <= 0 || entry.is_expired;
+                    const isCritical = entry.remaining_seconds <= 30 && !isTimeUp;
+                    const isWarning = entry.remaining_seconds <= 60 && !isCritical && !isTimeUp;
+
+                    return (
+                      <div
+                        key={entry.id}
+                        className="glass-panel"
+                        style={{
+                          padding: '20px',
+                          border: isTimeUp
+                            ? '2px solid #ff1e42'
+                            : isCritical
+                            ? '1px solid #ef4444'
+                            : isWarning
+                            ? '1px solid #f59e0b'
+                            : '1px solid rgba(16, 185, 129, 0.4)',
+                          background: isTimeUp
+                            ? 'rgba(255, 30, 66, 0.12)'
+                            : isCritical
+                            ? 'rgba(239, 68, 68, 0.08)'
+                            : 'rgba(0, 0, 0, 0.3)',
+                          boxShadow: isTimeUp ? '0 0 25px rgba(255, 30, 66, 0.3)' : 'none',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          justifyContent: 'space-between'
+                        }}
+                      >
+                        <div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                            <span className="tag" style={{ background: 'rgba(0, 240, 255, 0.1)', color: '#00f0ff', borderColor: 'rgba(0, 240, 255, 0.3)' }}>
+                              {entry.team_code}
+                            </span>
+                            {isTimeUp ? (
+                              <span className="tag tag-eliminated" style={{ animation: 'pulse 1s infinite' }}>
+                                🚨 TIME'S UP!
+                              </span>
+                            ) : (
+                              <span className="tag tag-active">ACTIVE IN ROOM</span>
+                            )}
+                          </div>
+
+                          <h4 style={{ fontSize: '1.25rem', fontWeight: 800, color: '#ffffff', marginBottom: '4px' }}>
+                            {entry.team_name}
+                          </h4>
+                          <p style={{ fontSize: '0.72rem', fontFamily: "'JetBrains Mono', monospace", color: 'var(--text-muted)' }}>
+                            Entry: {new Date(entry.entry_time).toLocaleTimeString()}
+                          </p>
+
+                          <div
+                            className={`countdown-display ${
+                              isTimeUp || isCritical ? 'countdown-critical' : isWarning ? 'countdown-warning' : 'countdown-normal'
+                            }`}
+                            style={{ fontSize: '2.5rem', margin: '14px 0', textAlign: 'center' }}
+                          >
+                            {isTimeUp ? '00:00' : formatTime(entry.remaining_seconds)}
+                          </div>
+                        </div>
+
+                        <div style={{ marginTop: '14px', paddingTop: '12px', borderTop: '1px solid var(--border-subtle)', display: 'flex', gap: '8px' }}>
+                          <button
+                            onClick={() => handleDismissEntry(entry.id)}
+                            className={`btn ${isTimeUp ? 'btn-danger' : 'btn-secondary'}`}
+                            style={{ flex: 1, padding: '8px', fontSize: '0.8rem' }}
+                          >
+                            {isTimeUp ? 'VACATE & COMPLETE' : 'END SESSION EARLY'}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -1220,6 +1347,60 @@ export default function AdminPortal() {
               </button>
               <button onClick={() => { setShowResetModal(false); setResetConfirmInput(''); }} className="btn btn-secondary" style={{ flex: 1 }}>
                 CANCEL
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── MODAL: TIME'S UP CRITICAL POP-UP ALERT ──────────────────────────── */}
+      {timesUpAlert && (
+        <div className="modal-overlay" style={{ background: 'rgba(0, 0, 0, 0.9)', zIndex: 99999 }}>
+          <div
+            className="modal-content"
+            style={{
+              padding: '32px',
+              border: '2px solid #ff1e42',
+              boxShadow: '0 0 50px rgba(255, 30, 66, 0.4)',
+              textAlign: 'center',
+              maxWidth: '460px',
+              background: '#0d070a'
+            }}
+          >
+            <div style={{ display: 'inline-flex', padding: '16px', borderRadius: '50%', background: 'rgba(255, 30, 66, 0.15)', border: '2px solid #ff1e42', marginBottom: '16px', animation: 'pulse 1s infinite' }}>
+              <AlertTriangle size={50} color="#ff1e42" />
+            </div>
+
+            <div style={{ color: '#ff1e42', fontWeight: 900, fontSize: '1.8rem', letterSpacing: '2px', marginBottom: '6px' }}>
+              🚨 TIME'S UP!
+            </div>
+            <div style={{ color: '#ffffff', fontSize: '1.25rem', fontWeight: 700, marginBottom: '4px' }}>
+              {timesUpAlert.team_name}
+            </div>
+            <p style={{ fontFamily: "'JetBrains Mono', monospace", color: '#00f0ff', fontSize: '0.9rem', marginBottom: '16px' }}>
+              TEAM ID: {timesUpAlert.team_code} // {timesUpAlert.room_name}
+            </p>
+
+            <div style={{ background: 'rgba(255, 30, 66, 0.1)', border: '1px solid rgba(255, 30, 66, 0.3)', borderRadius: 'var(--radius-md)', padding: '14px', marginBottom: '24px', textAlign: 'left' }}>
+              <p style={{ color: '#fca5a5', fontSize: '0.85rem', lineHeight: 1.5, margin: 0 }}>
+                ⚠️ The allotted investigation window for this team has <strong>completely expired</strong>. Please instruct the team to vacate the room immediately.
+              </p>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <button
+                onClick={() => handleDismissEntry(timesUpAlert.entry_id)}
+                className="btn btn-danger btn-lg btn-block"
+                style={{ padding: '14px', fontSize: '1rem', fontWeight: 800 }}
+              >
+                VACATE ROOM &amp; COMPLETE ENTRY
+              </button>
+              <button
+                onClick={() => setTimesUpAlert(null)}
+                className="btn btn-secondary btn-block"
+                style={{ padding: '10px', fontSize: '0.85rem' }}
+              >
+                DISMISS ALERT (KEEP TIMER VISIBLE)
               </button>
             </div>
           </div>

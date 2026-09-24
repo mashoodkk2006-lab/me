@@ -255,6 +255,18 @@ function executeMemory(sql, params = []) {
     return { affectedRows: 1 };
   }
 
+  if (s.startsWith("update room_entries set status = 'expired'")) {
+    if (s.includes('where id = ?')) {
+      const entry = memoryStore.room_entries.find(x => x.id === params[0]);
+      if (entry) entry.status = 'EXPIRED';
+    } else if (s.includes('where team_id = ?')) {
+      memoryStore.room_entries.forEach(x => {
+        if (x.team_id === params[0]) x.status = 'EXPIRED';
+      });
+    }
+    return { affectedRows: 1 };
+  }
+
   if (s.startsWith('delete from room_entries')) {
     memoryStore.room_entries = [];
     return { affectedRows: 1 };
