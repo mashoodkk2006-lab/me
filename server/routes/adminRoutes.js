@@ -378,6 +378,157 @@ router.get('/rounds', requireHeadAdmin, async (req, res) => {
   }
 });
 
+// Create a new round (Head Admin)
+router.post('/rounds', requireHeadAdmin, async (req, res) => {
+  try {
+    let { round_number, durations } = req.body;
+
+    if (!round_number) {
+      const maxRow = await getOne('SELECT MAX(round_number) as max_round FROM rounds');
+      round_number = (maxRow?.max_round ? parseInt(maxRow.max_round, 10) : 0) + 1;
+    } else {
+      round_number = parseInt(round_number, 10);
+      if (isNaN(round_number) || round_number <= 0) {
+        return res.status(400).json({ error: 'Round number must be a positive integer.' });
+      }
+    }
+
+    // Check unique
+    const existing = await getOne('SELECT id FROM rounds WHERE round_number = ?', [round_number]);
+    if (existing) {
+      return res.status(400).json({ error: `Round ${round_number} already exists.` });
+    }
+
+    const anyActive = await getOne("SELECT id FROM rounds WHERE status = 'ACTIVE'");
+    const initialStatus = anyActive ? 'PENDING' : 'ACTIVE';
+
+    const roundResult = await execute(
+      'INSERT INTO rounds (round_number, status) VALUES (?, ?)',
+      [round_number, initialStatus]
+    );
+    const roundId = roundResult.insertId;
+
+    // Fetch all rooms and create default/custom room settings
+    const rooms = await query('SELECT * FROM rooms ORDER BY id ASC');
+    for (const room of rooms) {
+      let durationMinutes = 5;
+      if (durations) {
+        if (typeof durations[room.id] !== 'undefined') {
+          durationMinutes = parseInt(durations[room.id], 10) || 5;
+        } else if (typeof durations[room.room_code] !== 'undefined') {
+          durationMinutes = parseInt(durations[room.room_code], 10) || 5;
+        }
+      }
+
+      await execute(
+        'INSERT INTO room_settings (round_id, room_id, duration_minutes) VALUES (?, ?, ?)',
+        [roundId, room.id, durationMinutes]
+      );
+    }
+
+    await logActivity(
+      req.user.id,
+      req.user.username,
+      'CREATE_ROUND',
+      `Created Round ${round_number} (${initialStatus})`
+    );
+
+    broadcastRoundUpdate({ round_id: roundId, round_number, status: initialStatus });
+
+    res.json({
+      success: true,
+      round: {
+        id: roundId,
+        round_number,
+        status: initialStatus
+      }
+    });
+  } catch (err) {
+    console.error('Create round error:', err);
+    res.status(500).json({ error: 'Failed to create round.' });
+  }
+});
+
+// Configure total number of rounds in bulk (Head Admin)
+router.post('/rounds/set-total', requireHeadAdmin, async (req, res) => {
+  try {
+    const { total_rounds } = req.body;
+    const total = parseInt(total_rounds, 10);
+    if (isNaN(total) || total < 1 || total > 50) {
+      return res.status(400).json({ error: 'Total rounds must be between 1 and 50.' });
+    }
+
+    const rooms = await query('SELECT * FROM rooms ORDER BY id ASC');
+    const existingRounds = await query('SELECT * FROM rounds ORDER BY round_number ASC');
+    const existingNumbers = new Set(existingRounds.map(r => r.round_number));
+
+    for (let rNum = 1; rNum <= total; rNum++) {
+      if (!existingNumbers.has(rNum)) {
+        const anyActive = await getOne("SELECT id FROM rounds WHERE status = 'ACTIVE'");
+        const status = (!anyActive && rNum === 1) ? 'ACTIVE' : 'PENDING';
+        const resInsert = await execute('INSERT INTO rounds (round_number, status) VALUES (?, ?)', [rNum, status]);
+        const newRoundId = resInsert.insertId;
+
+        for (const room of rooms) {
+          await execute(
+            'INSERT INTO room_settings (round_id, room_id, duration_minutes) VALUES (?, ?, ?)',
+            [newRoundId, room.id, 5]
+          );
+        }
+      }
+    }
+
+    await logActivity(
+      req.user.id,
+      req.user.username,
+      'SET_TOTAL_ROUNDS',
+      `Configured tournament total rounds to ${total}`
+    );
+
+    broadcastRoundUpdate({ action: 'bulk_update' });
+
+    res.json({ success: true, message: `Configured tournament rounds up to Round ${total}.` });
+  } catch (err) {
+    console.error('Set total rounds error:', err);
+    res.status(500).json({ error: 'Failed to set total rounds.' });
+  }
+});
+
+// Delete a round (Head Admin)
+router.delete('/rounds/:id', requireHeadAdmin, async (req, res) => {
+  try {
+    const roundId = parseInt(req.params.id, 10);
+    const round = await getOne('SELECT * FROM rounds WHERE id = ?', [roundId]);
+    if (!round) return res.status(404).json({ error: 'Round not found.' });
+
+    await execute('DELETE FROM room_entries WHERE round_id = ?', [roundId]);
+    await execute('DELETE FROM room_settings WHERE round_id = ?', [roundId]);
+    await execute('DELETE FROM rounds WHERE id = ?', [roundId]);
+
+    if (round.status === 'ACTIVE') {
+      const nextRound = await getOne('SELECT * FROM rounds ORDER BY round_number ASC LIMIT 1');
+      if (nextRound) {
+        await execute("UPDATE rounds SET status = 'ACTIVE' WHERE id = ?", [nextRound.id]);
+        broadcastRoundUpdate({ round_id: nextRound.id, round_number: nextRound.round_number, status: 'ACTIVE' });
+      }
+    } else {
+      broadcastRoundUpdate({ action: 'delete_round', round_id: roundId });
+    }
+
+    await logActivity(
+      req.user.id,
+      req.user.username,
+      'DELETE_ROUND',
+      `Deleted Round ${round.round_number}`
+    );
+
+    res.json({ success: true, message: `Round ${round.round_number} has been deleted.` });
+  } catch (err) {
+    console.error('Delete round error:', err);
+    res.status(500).json({ error: 'Failed to delete round.' });
+  }
+});
+
 // Set active round
 router.post('/rounds/:id/set-active', requireHeadAdmin, async (req, res) => {
   try {

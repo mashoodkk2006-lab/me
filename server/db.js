@@ -124,6 +124,10 @@ function queryMemory(sql, params = []) {
   }
 
   if (s.includes('from rounds')) {
+    if (s.includes('max(round_number)')) {
+      const max = memoryStore.rounds.length > 0 ? Math.max(...memoryStore.rounds.map(r => r.round_number)) : 0;
+      return [{ max_round: max }];
+    }
     if (s.includes("status = 'active'")) {
       const r = memoryStore.rounds.find(x => x.status === 'ACTIVE');
       return r ? [{ ...r }] : [];
@@ -318,6 +322,37 @@ function executeMemory(sql, params = []) {
       changed_at: new Date()
     });
     return { insertId: id };
+  }
+
+  if (s.startsWith('insert into rounds')) {
+    const id = memoryStore.rounds.length > 0 ? Math.max(...memoryStore.rounds.map(r => r.id)) + 1 : 1;
+    memoryStore.rounds.push({
+      id,
+      round_number: params[0],
+      status: params[1] || 'PENDING',
+      created_at: new Date()
+    });
+    return { insertId: id };
+  }
+
+  if (s.startsWith('delete from rounds where id = ?')) {
+    const targetId = params[0];
+    memoryStore.rounds = memoryStore.rounds.filter(r => r.id !== targetId);
+    memoryStore.room_settings = memoryStore.room_settings.filter(rs => rs.round_id !== targetId);
+    memoryStore.room_entries = memoryStore.room_entries.filter(re => re.round_id !== targetId);
+    return { affectedRows: 1 };
+  }
+
+  if (s.startsWith('delete from room_settings where round_id = ?')) {
+    const targetId = params[0];
+    memoryStore.room_settings = memoryStore.room_settings.filter(rs => rs.round_id !== targetId);
+    return { affectedRows: 1 };
+  }
+
+  if (s.startsWith('delete from room_entries where round_id = ?')) {
+    const targetId = params[0];
+    memoryStore.room_entries = memoryStore.room_entries.filter(re => re.round_id !== targetId);
+    return { affectedRows: 1 };
   }
 
   if (s.includes('update rounds set status =')) {

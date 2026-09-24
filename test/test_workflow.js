@@ -89,8 +89,38 @@ async function runTests() {
   const remaining = Math.floor((expiryTime - now) / 1000);
   assert(remaining === 300, 'Server-authoritative countdown calculates 300 seconds for 5-minute room');
 
+  // Test 6: Database Round Management & Configuration Logic
+  const { query, execute, initDatabase } = require('../server/db');
+  await initDatabase();
+
+  // Test adding round
+  const maxRoundBefore = await query('SELECT MAX(round_number) as max_round FROM rounds');
+  const nextRoundNum = (maxRoundBefore[0]?.max_round || 3) + 1;
+  const insertRoundRes = await execute('INSERT INTO rounds (round_number, status) VALUES (?, ?)', [nextRoundNum, 'PENDING']);
+  assert(insertRoundRes.insertId > 0, `Admin successfully added Round ${nextRoundNum}`);
+
+  // Test default room setting insertion for new round
+  await execute('INSERT INTO room_settings (round_id, room_id, duration_minutes) VALUES (?, ?, ?)', [insertRoundRes.insertId, 1, 8]);
+  const settingCheck = await query('SELECT * FROM room_settings WHERE round_id = ? AND room_id = ?', [insertRoundRes.insertId, 1]);
+  assert(settingCheck.length > 0 && settingCheck[0].duration_minutes === 8, 'Room settings for new round saved with configured time limit (8 mins)');
+
+  // Test setting active round
+  await execute("UPDATE rounds SET status = 'COMPLETED' WHERE id < ?", [insertRoundRes.insertId]);
+  await execute("UPDATE rounds SET status = 'ACTIVE' WHERE id = ?", [insertRoundRes.insertId]);
+  const activeCheck = await query("SELECT * FROM rounds WHERE id = ?", [insertRoundRes.insertId]);
+  assert(activeCheck.length > 0 && activeCheck[0].status === 'ACTIVE', `Round ${nextRoundNum} set as ACTIVE successfully`);
+
+  // Test deleting round
+  await execute('DELETE FROM room_settings WHERE round_id = ?', [insertRoundRes.insertId]);
+  await execute('DELETE FROM rounds WHERE id = ?', [insertRoundRes.insertId]);
+  const deletedCheck = await query('SELECT * FROM rounds WHERE id = ?', [insertRoundRes.insertId]);
+  assert(deletedCheck.length === 0, `Round ${nextRoundNum} successfully deleted`);
+
+  // Restore Round 1 as active
+  await execute("UPDATE rounds SET status = 'ACTIVE' WHERE round_number = 1");
+
   console.log(`\nTEST SUMMARY: ${passed} Passed, ${failed} Failed.`);
-  if (failed > 0) process.exit(1);
+  process.exit(failed > 0 ? 1 : 0);
 }
 
 runTests();

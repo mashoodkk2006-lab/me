@@ -33,6 +33,12 @@ export default function AdminPortal() {
   const [qrDataUrl, setQrDataUrl] = useState('');
   const [showAddTeamModal, setShowAddTeamModal] = useState(false);
   const [showAddVolModal, setShowAddVolModal] = useState(false);
+  const [showAddRoundModal, setShowAddRoundModal] = useState(false);
+  const [showSetTotalRoundsModal, setShowSetTotalRoundsModal] = useState(false);
+  const [newRoundNumber, setNewRoundNumber] = useState('');
+  const [newRoundDurations, setNewRoundDurations] = useState({});
+  const [totalRoundsInput, setTotalRoundsInput] = useState('');
+  const [roundActionError, setRoundActionError] = useState('');
   const [showResetModal, setShowResetModal] = useState(false);
   const [resetConfirmInput, setResetConfirmInput] = useState('');
   const [scoreEditTeam, setScoreEditTeam] = useState(null);
@@ -426,6 +432,88 @@ export default function AdminPortal() {
         fetchVolunteers();
       }
     } catch (e) {}
+  };
+
+  // Open Add Round Modal
+  const openAddRoundModal = () => {
+    const maxNum = roundsData.rounds.length > 0
+      ? Math.max(...roundsData.rounds.map(r => r.round_number))
+      : 0;
+    setNewRoundNumber(maxNum + 1);
+    const initialDurations = {};
+    roundsData.rooms.forEach(r => {
+      initialDurations[r.id] = 5;
+    });
+    setNewRoundDurations(initialDurations);
+    setRoundActionError('');
+    setShowAddRoundModal(true);
+  };
+
+  // Create New Round
+  const handleCreateRound = async (e) => {
+    e.preventDefault();
+    setRoundActionError('');
+    try {
+      const res = await fetch('/api/admin/rounds', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          round_number: parseInt(newRoundNumber, 10),
+          durations: newRoundDurations
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setRoundActionError(data.error || 'Failed to create round.');
+      } else {
+        setShowAddRoundModal(false);
+        fetchRounds();
+        fetchMonitor();
+      }
+    } catch (err) {
+      setRoundActionError('Server connection error.');
+    }
+  };
+
+  // Configure Total Rounds in Bulk
+  const handleSetTotalRounds = async (e) => {
+    e.preventDefault();
+    setRoundActionError('');
+    try {
+      const res = await fetch('/api/admin/rounds/set-total', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ total_rounds: parseInt(totalRoundsInput, 10) })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setRoundActionError(data.error || 'Failed to configure total rounds.');
+      } else {
+        setShowSetTotalRoundsModal(false);
+        setTotalRoundsInput('');
+        fetchRounds();
+        fetchMonitor();
+      }
+    } catch (err) {
+      setRoundActionError('Server connection error.');
+    }
+  };
+
+  // Delete Round
+  const handleDeleteRound = async (round) => {
+    if (!window.confirm(`⚠️ Are you sure you want to delete ROUND ${round.round_number}? All room configurations for this round will be removed.`)) return;
+    try {
+      const res = await fetch(`/api/admin/rounds/${round.id}`, { method: 'DELETE' });
+      if (res.ok) {
+        fetchRounds();
+        fetchMonitor();
+      } else {
+        const data = await res.json();
+        alert(data.error || 'Failed to delete round.');
+      }
+    } catch (e) {
+      alert('Error connecting to server.');
+    }
   };
 
   // Set Active Round
@@ -1050,11 +1138,35 @@ export default function AdminPortal() {
         {/* ─── TAB: ROUNDS & LIMITS (Head Admin) ─────────────────────────────── */}
         {activeTab === 'rounds' && isHeadAdmin && (
           <div className="glass-panel" style={{ padding: '24px' }}>
-            <div style={{ marginBottom: '20px' }}>
-              <h2 style={{ fontSize: '1.4rem' }}>ROUNDS &amp; ROOM TIME LIMITS</h2>
-              <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                Set active round and configure countdown minutes per room & round
-              </p>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '14px', marginBottom: '22px' }}>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <h2 style={{ fontSize: '1.4rem' }}>ROUNDS &amp; ROOM TIME LIMITS</h2>
+                  <span className="tag tag-room" style={{ fontSize: '0.78rem' }}>
+                    {roundsData.rounds.length} ROUNDS CONFIGURED
+                  </span>
+                </div>
+                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '4px' }}>
+                  Add rounds, set total rounds for the event, activate rounds, and configure room countdown timers.
+                </p>
+              </div>
+
+              <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                <button
+                  onClick={() => { setShowSetTotalRoundsModal(true); setRoundActionError(''); }}
+                  className="btn btn-secondary"
+                  style={{ padding: '8px 14px', fontSize: '0.82rem' }}
+                >
+                  <Settings size={14} /> CONFIGURE TOTAL ROUNDS
+                </button>
+                <button
+                  onClick={openAddRoundModal}
+                  className="btn btn-primary"
+                  style={{ padding: '8px 16px', fontSize: '0.85rem' }}
+                >
+                  <Plus size={16} /> ADD ROUND
+                </button>
+              </div>
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
@@ -1070,20 +1182,30 @@ export default function AdminPortal() {
                       background: isActive ? 'rgba(255, 30, 66, 0.04)' : 'rgba(255, 255, 255, 0.02)'
                     }}
                   >
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px', flexWrap: 'wrap', gap: '10px' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                         <h3 style={{ fontSize: '1.2rem' }}>ROUND {round.round_number}</h3>
                         <span className={`tag ${isActive ? 'tag-active' : ''}`}>{round.status}</span>
                       </div>
-                      {!isActive && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        {!isActive && (
+                          <button
+                            onClick={() => handleSetActiveRound(round.id)}
+                            className="btn btn-secondary"
+                            style={{ padding: '6px 12px', fontSize: '0.8rem' }}
+                          >
+                            <Play size={12} /> SET AS ACTIVE ROUND
+                          </button>
+                        )}
                         <button
-                          onClick={() => handleSetActiveRound(round.id)}
-                          className="btn btn-secondary"
-                          style={{ padding: '4px 12px', fontSize: '0.8rem' }}
+                          onClick={() => handleDeleteRound(round)}
+                          className="btn btn-danger"
+                          style={{ padding: '6px 10px', fontSize: '0.8rem' }}
+                          title={`Delete Round ${round.round_number}`}
                         >
-                          <Play size={12} /> SET AS ACTIVE ROUND
+                          <Trash2 size={13} />
                         </button>
-                      )}
+                      </div>
                     </div>
 
                     <div className="grid-2">
@@ -1311,6 +1433,119 @@ export default function AdminPortal() {
               <div style={{ display: 'flex', gap: '10px', marginTop: '20px' }}>
                 <button type="submit" className="btn btn-primary" style={{ flex: 1 }}>CREATE</button>
                 <button type="button" onClick={() => setShowAddVolModal(false)} className="btn btn-secondary" style={{ flex: 1 }}>CANCEL</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ─── MODAL: ADD ROUND ────────────────────────────────────────────────── */}
+      {showAddRoundModal && (
+        <div className="modal-overlay">
+          <div className="modal-content" style={{ padding: '24px' }}>
+            <h3 style={{ fontSize: '1.3rem', marginBottom: '8px' }}>ADD TOURNAMENT ROUND</h3>
+            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '16px' }}>
+              Create a new round and define default countdown timers per room.
+            </p>
+
+            {roundActionError && (
+              <div style={{ marginBottom: '14px', padding: '10px 14px', borderRadius: 'var(--radius-sm)', background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.4)', color: '#f87171', fontSize: '0.85rem' }}>
+                {roundActionError}
+              </div>
+            )}
+
+            <form onSubmit={handleCreateRound}>
+              <div className="input-group">
+                <label className="input-label">ROUND NUMBER</label>
+                <input
+                  type="number"
+                  required
+                  min="1"
+                  max="99"
+                  value={newRoundNumber}
+                  onChange={(e) => setNewRoundNumber(e.target.value)}
+                  className="input-field"
+                  style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '1.1rem' }}
+                />
+              </div>
+
+              <div style={{ marginTop: '16px', marginBottom: '10px' }}>
+                <label className="input-label">ROOM TIME LIMITS (MINUTES)</label>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '6px' }}>
+                  {roundsData.rooms.map((rm) => (
+                    <div
+                      key={rm.id}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '10px 14px',
+                        background: 'rgba(0, 0, 0, 0.3)',
+                        borderRadius: 'var(--radius-sm)',
+                        border: '1px solid var(--border-subtle)'
+                      }}
+                    >
+                      <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>{rm.room_name} ({rm.room_code})</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <input
+                          type="number"
+                          min="1"
+                          max="120"
+                          value={newRoundDurations[rm.id] || 5}
+                          onChange={(e) => setNewRoundDurations({ ...newRoundDurations, [rm.id]: e.target.value })}
+                          className="input-field"
+                          style={{ width: '70px', padding: '6px', textAlign: 'center', fontSize: '0.9rem', fontFamily: "'JetBrains Mono', monospace" }}
+                        />
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>mins</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', gap: '10px', marginTop: '22px' }}>
+                <button type="submit" className="btn btn-primary" style={{ flex: 1 }}>CREATE ROUND</button>
+                <button type="button" onClick={() => setShowAddRoundModal(false)} className="btn btn-secondary" style={{ flex: 1 }}>CANCEL</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ─── MODAL: CONFIGURE TOTAL ROUNDS ──────────────────────────────────── */}
+      {showSetTotalRoundsModal && (
+        <div className="modal-overlay">
+          <div className="modal-content" style={{ padding: '24px' }}>
+            <h3 style={{ fontSize: '1.3rem', marginBottom: '8px' }}>CONFIGURE TOTAL ROUNDS</h3>
+            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '16px' }}>
+              Specify the total number of rounds for the tournament (e.g. 4, 5, 8). Missing rounds will be created automatically.
+            </p>
+
+            {roundActionError && (
+              <div style={{ marginBottom: '14px', padding: '10px 14px', borderRadius: 'var(--radius-sm)', background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.4)', color: '#f87171', fontSize: '0.85rem' }}>
+                {roundActionError}
+              </div>
+            )}
+
+            <form onSubmit={handleSetTotalRounds}>
+              <div className="input-group">
+                <label className="input-label">TOTAL NUMBER OF ROUNDS</label>
+                <input
+                  type="number"
+                  required
+                  min="1"
+                  max="30"
+                  placeholder="e.g. 5"
+                  value={totalRoundsInput}
+                  onChange={(e) => setTotalRoundsInput(e.target.value)}
+                  className="input-field"
+                  style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '1.2rem', textAlign: 'center' }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', gap: '10px', marginTop: '20px' }}>
+                <button type="submit" className="btn btn-primary" style={{ flex: 1 }}>SET TOTAL ROUNDS</button>
+                <button type="button" onClick={() => setShowSetTotalRoundsModal(false)} className="btn btn-secondary" style={{ flex: 1 }}>CANCEL</button>
               </div>
             </form>
           </div>
